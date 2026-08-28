@@ -36,6 +36,13 @@ extra_instructions = """
   设计,且本组织仓库均为私有、内部协作,不涉及该场景。
 - 建议改用 pull_request_target 以便 fork PR 能拿到 secrets。该触发器会让
   不可信代码取得完整 secrets,已明确否决。
+- 建议在调用方之外、于可复用工作流中重复声明 permissions,理由是"调用方的
+  job 级 permissions 不作用于被调用的工作流"。该说法与实测不符:本组织仓库
+  的默认 token 权限均为 read,而可复用工作流不声明任何 permissions,运行仍
+  成功发布了 PR 评论、行级建议与标签(均需 write),说明调用方权限确实传递。
+- 提出 PR-Agent 的配置项时必须确认其真实存在。此前曾建议使用
+  pr_reviewer.max_inline_comments,而该键在 PR-Agent 中并不存在,写入后会被
+  静默忽略,反而造成"限制已生效"的错觉。不确定时改用文字说明。
 
 每次评审最多报告 5 条 Nit 级问题,超出的在总结里以数量概括。
 """

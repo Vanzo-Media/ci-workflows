@@ -31,8 +31,13 @@ on:
 
 jobs:
   pr_agent_job:
-    # 无需事件过滤:调用方只在 pull_request 上触发。评论命令通道曾在此处
-    # 需要三重判断(是否 PR 评论、是否 / 命令、发起者身份),已随通道移除。
+    # 两重作用:
+    # 1. 不评审草稿 PR。opened 与 synchronize 对草稿同样触发,而 ready_for_review
+    #    本就是"转正式时评审一次"的事件——不排除草稿的话,半成品代码会被反复
+    #    评审,产出的建议到 PR 真正 ready 时多已过时,纯属浪费。
+    # 2. 拒绝非 pull_request 事件。调用方约定只监听 pull_request,但那是约定
+    #    而非强制;若有人复制旧模板或手写时加了 issue_comment,这里兜底。
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     name: AI Code Review
     timeout-minutes: 15
