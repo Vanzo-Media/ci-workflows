@@ -31,27 +31,30 @@ on:
 
 jobs:
   pr_agent_job:
-    # 三重过滤:
-    # 1. issue_comment 只处理 PR 上、且以 / 开头的命令评论——普通讨论评论
-    #    同样会启动 runner 并拉镜像,不过滤等于每条留言烧一次 CI。
-    # 2. 命令评论还要求发起者是 owner / member / collaborator。本仓库是
-    #    public,不加这条则任何陌生人一句 /review 就能消耗 API 额度。
-    # 3. bot 检查只收窄到评论路径:PR 事件不查 bot,否则 Dependabot 升级
-    #    action SHA 的 PR 会被跳过,而那恰恰是最该被审的一类改动。
-    if: >-
-      ${{
-        github.event_name == 'pull_request' ||
-        (
-          github.event.issue.pull_request &&
-          startsWith(github.event.comment.body, '/') &&
-          github.event.sender.type != 'Bot' &&
-          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-        )
-      }}
+    # 两重作用:
+    # 1. 不评审草稿 PR。opened 与 synchronize 对草稿同样触发,而 ready_for_review
+    #    本就是"转正式时评审一次"的事件——不排除草稿的话,半成品代码会被反复
+    #    评审,产出的建议到 PR 真正 ready 时多已过时,纯属浪费。
+    # 2. 拒绝非 pull_request 事件。调用方约定只监听 pull_request,但那是约定
+    #    而非强制;若有人复制旧模板或手写时加了 issue_comment,这里兜底。
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     name: AI Code Review
     timeout-minutes: 15
     steps:
+      # 前置校验。workflow_call 的 secrets.required 只要求调用方"传了这个参数",
+      # 传空字符串同样满足,因此新仓库接入时忘配 secret 不会被拦住,而是跑满
+      # 几分钟后失败在模型认证上,错误信息含糊。这里快速失败并给出可执行的提示。
+      # secret 经 env 中转而非直接插入 shell,遵循官方安全加固建议。
+      - name: 校验 DEEPSEEK_KEY 已配置
+        env:
+          DEEPSEEK_KEY: ${{ secrets.DEEPSEEK_KEY }}
+        run: |
+          if [ -z "$DEEPSEEK_KEY" ]; then
+            echo "::error::本仓库未配置 DEEPSEEK_KEY。请在 Settings → Secrets and variables → Actions 添加该 secret(组织级 secret 在当前计划下对私有仓库无效,需每个仓库各自添加)。"
+            exit 1
+          fi
+
       - name: PR Agent action step
         id: pragent
         # 锁定到具体 commit SHA 而非 @main 或 tag。
