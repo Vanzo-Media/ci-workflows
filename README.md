@@ -26,12 +26,10 @@ name: PR Agent
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
-  issue_comment:
-    types: [created]
 
 concurrency:
-  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: pr-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   review:
@@ -47,15 +45,14 @@ jobs:
 
 `permissions` 必须写在调用方:被调用的工作流在调用方授予的范围内运行,无法自行提权。本仓库的可复用工作流不声明 `permissions`,完全由调用方决定。
 
-`cancel-in-progress` 只对 `pull_request` 事件为真:concurrency 在工作流级生效,早于 job 的 `if` 求值,若对全部事件为真,PR 上一条普通评论就会新建 run 并掐掉正在进行的评审,而该 run 自身随后又被跳过。
+工作流只在**代码变动**时触发,不监听评论。评论命令通道(`/review` 等)曾先后引入两次 concurrency 竞态且无实际使用,已移除;评审失败需要重试时,close 再 reopen 该 PR 即可。
 
 ## 行为
 
 | 时机 | 动作 |
 | --- | --- |
-| PR 打开 / 重开 / 从草稿转为 ready | 执行 `/review` 和 `/improve` |
-| 向 PR 分支 push 新 commit | 重新执行 `/review` 和 `/improve` |
-| 在 PR 中评论 `/review` `/improve` `/describe` `/ask <问题>` | 执行对应命令 |
+| PR 打开 / 重开 / 从草稿转为 ready | 评审并给出改进建议 |
+| 向 PR 分支 push 新 commit | 重新评审(连续 push 时取消过时的一轮,只跑最新)|
 
 审查结果以两种形式出现在 PR 上:
 
@@ -83,7 +80,7 @@ jobs:
       handle_push_trigger: "false"
 ```
 
-同时把 `on.pull_request.types` 里的 `synchronize` 去掉。**两处必须成对修改**:只留 `synchronize` 会产生空跑,并因 `cancel-in-progress` 掐断正在进行的评审;只关 `handle_push_trigger` 则 push 事件根本不会进入工作流。
+同时把 `on.pull_request.types` 里的 `synchronize` 去掉。关闭后评审只在 PR 打开时跑一次,后续 push 的代码不会被审查。**两处必须成对修改**:只留 `synchronize` 会产生空跑,并因 `cancel-in-progress` 掐断正在进行的评审;只关 `handle_push_trigger` 则 push 事件根本不会进入工作流。
 
 ### 调整审查标准
 

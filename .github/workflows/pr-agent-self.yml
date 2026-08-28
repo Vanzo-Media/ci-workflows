@@ -10,16 +10,10 @@ name: PR Agent
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
-  issue_comment:
-    types: [created]
 
 concurrency:
-  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
-  # 只让 pull_request 事件取消进行中的运行。concurrency 在工作流级生效,
-  # 早于 job 的 if 求值,因此一条普通评论(不是 / 命令)也会新建 run 并
-  # 掐掉正在进行的评审——该 run 随后因 if 为假而跳过,评审被杀掉且不重跑。
-  # 评论触发的 run 改为排队等待,不取消他人。
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: pr-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   review:

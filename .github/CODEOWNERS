@@ -1,0 +1,3 @@
+# 本仓库的产物在全部接入仓库中以 write 权限执行,
+# 任何改动都需经 Code Owner 审批(由 main 分支的 ruleset 强制)。
+* @zhihong-vanzo

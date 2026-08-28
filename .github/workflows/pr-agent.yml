@@ -31,23 +31,8 @@ on:
 
 jobs:
   pr_agent_job:
-    # 三重过滤:
-    # 1. issue_comment 只处理 PR 上、且以 / 开头的命令评论——普通讨论评论
-    #    同样会启动 runner 并拉镜像,不过滤等于每条留言烧一次 CI。
-    # 2. 命令评论还要求发起者是 owner / member / collaborator。本仓库是
-    #    public,不加这条则任何陌生人一句 /review 就能消耗 API 额度。
-    # 3. bot 检查只收窄到评论路径:PR 事件不查 bot,否则 Dependabot 升级
-    #    action SHA 的 PR 会被跳过,而那恰恰是最该被审的一类改动。
-    if: >-
-      ${{
-        github.event_name == 'pull_request' ||
-        (
-          github.event.issue.pull_request &&
-          startsWith(github.event.comment.body, '/') &&
-          github.event.sender.type != 'Bot' &&
-          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-        )
-      }}
+    # 无需事件过滤:调用方只在 pull_request 上触发。评论命令通道曾在此处
+    # 需要三重判断(是否 PR 评论、是否 / 命令、发起者身份),已随通道移除。
     runs-on: ubuntu-latest
     name: AI Code Review
     timeout-minutes: 15
