@@ -1,0 +1,32 @@
+name: PR Agent
+
+# 本仓库自身的 AI 代码审查。
+#
+# 刻意使用相对路径 ./ 而非 @main:pull_request 事件会加载 PR 分支上的
+# workflow,因此对 pr-agent.yml 的改动会被"改动后的那一版"审查,
+# 自带回归验证。这也是本仓库最需要审查的原因——它的产物在 7 个仓库中
+# 以 write 权限执行。
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    uses: ./.github/workflows/pr-agent.yml
+    # 一旦显式声明 permissions,未列出的 scope 一律为 none 而非默认值。
+    # contents: read 必需,否则 PR-Agent 读不到 .pr_agent.toml、读不到
+    # 文件内容、算不出 merge base(全部 403),而 job 仍会成功,评审静默降级。
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      checks: write
+    secrets:
+      DEEPSEEK_KEY: ${{ secrets.DEEPSEEK_KEY }}

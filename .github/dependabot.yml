@@ -1,0 +1,13 @@
+# 跟踪被 pin 到 commit SHA 的 GitHub Actions,上游发新版时自动开 PR。
+#
+# 锁定 SHA 消除了"上游任何提交都会未经审查直接执行"的风险,Dependabot
+# 则避免因此长期停留在旧版本、错过安全修复。两者配套才完整。
+#
+# 由于所有仓库共用本仓库的可复用 workflow,action SHA 只存在于这里,
+# 因此只需在本仓库配置 Dependabot,升级一次即对全部调用方生效。
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

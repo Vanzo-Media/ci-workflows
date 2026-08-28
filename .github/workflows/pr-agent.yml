@@ -1,0 +1,90 @@
+name: PR Agent (reusable)
+
+# Vanzo-Media 统一的 AI 代码审查实现。各仓库通过 workflow_call 调用本文件,
+# 自身只保留触发条件与授权,不重复实现细节。
+#
+# 调用方式见本仓库 README.md。
+# 前置条件:调用方仓库的 Secrets 中需存在 DEEPSEEK_KEY。
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: "主模型(LiteLLM 标识,需带 provider 前缀)"
+        type: string
+        default: "deepseek/deepseek-v4-flash"
+      fallback_model:
+        description: "主模型调用失败时的降级模型"
+        type: string
+        default: "deepseek/deepseek-v4-pro"
+      auto_describe:
+        description: "是否让 AI 改写 PR 标题与描述"
+        type: string
+        default: "false"
+      handle_push_trigger:
+        description: "push 新 commit 时是否重新评审"
+        type: string
+        default: "true"
+    secrets:
+      DEEPSEEK_KEY:
+        required: true
+
+jobs:
+  pr_agent_job:
+    # 三重过滤:
+    # 1. issue_comment 只处理 PR 上、且以 / 开头的命令评论——普通讨论评论
+    #    同样会启动 runner 并拉镜像,不过滤等于每条留言烧一次 CI。
+    # 2. 命令评论还要求发起者是 owner / member / collaborator。本仓库是
+    #    public,不加这条则任何陌生人一句 /review 就能消耗 API 额度。
+    # 3. bot 检查只收窄到评论路径:PR 事件不查 bot,否则 Dependabot 升级
+    #    action SHA 的 PR 会被跳过,而那恰恰是最该被审的一类改动。
+    if: >-
+      ${{
+        github.event_name == 'pull_request' ||
+        (
+          github.event.issue.pull_request &&
+          startsWith(github.event.comment.body, '/') &&
+          github.event.sender.type != 'Bot' &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        )
+      }}
+    runs-on: ubuntu-latest
+    name: AI Code Review
+    timeout-minutes: 15
+    steps:
+      - name: PR Agent action step
+        id: pragent
+        # 锁定到具体 commit SHA 而非 @main 或 tag。
+        # 该 action 在调用方仓库的上下文中执行,持有 write 权限的 GITHUB_TOKEN
+        # 和 DEEPSEEK_KEY,若跟随可变引用,上游任何提交都会未经审查直接运行。
+        # tag 可被 force-push 移动,SHA 不可伪造。升级由 Dependabot 提 PR。
+        uses: the-pr-agent/pr-agent@4ebd5c5333c6ef21509e7304d27969eb825e6f22 # v0.43.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # DeepSeek key。两处都设是有意为之:deepseek.key 是 PR-Agent 的
+          # 配置路径,DEEPSEEK_API_KEY 是 LiteLLM 直接读取的环境变量。
+          # 注意:来自 fork 的 PR 拿不到 secrets,其评审会认证失败——这是
+          # GitHub 的安全设计,内部协作(同仓库分支)不受影响。
+          deepseek.key: ${{ secrets.DEEPSEEK_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_KEY }}
+
+          # 模型必须配在 env。不能放进各仓库的 .pr_agent.toml——
+          # PR-Agent 从仓库默认分支读取该文件,PR 分支上的改动不生效。
+          config.model: ${{ inputs.model }}
+          config.fallback_models: '["${{ inputs.fallback_model }}"]'
+
+          # 以 GitHub 原生 suggestion 块发布建议,使评论上出现
+          # 可直接提交的 Commit suggestion 按钮。
+          pr_code_suggestions.commitable_code_suggestions: "true"
+
+          # push 触发的重审执行哪些命令。必须显式指定:默认值是
+          # ["/describe", "/review"],会改写 PR 标题描述,且不含 /improve
+          # (即 push 后的重审没有可提交建议)。
+          github_action_config.handle_push_trigger: ${{ inputs.handle_push_trigger }}
+          github_action_config.push_commands: '["/review", "/improve"]'
+
+          # PR 打开/重开时自动触发哪些工具
+          github_action_config.auto_review: "true"
+          github_action_config.auto_improve: "true"
+          github_action_config.auto_describe: ${{ inputs.auto_describe }}
