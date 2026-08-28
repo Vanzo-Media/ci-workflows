@@ -31,7 +31,7 @@ on:
 
 concurrency:
   group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   review:
@@ -45,7 +45,9 @@ jobs:
       DEEPSEEK_KEY: ${{ secrets.DEEPSEEK_KEY }}
 ```
 
-`permissions` 必须写在调用方:被调用的工作流只能在调用方授予的范围内进一步收窄,无法自行提权。
+`permissions` 必须写在调用方:被调用的工作流在调用方授予的范围内运行,无法自行提权。本仓库的可复用工作流不声明 `permissions`,完全由调用方决定。
+
+`cancel-in-progress` 只对 `pull_request` 事件为真:concurrency 在工作流级生效,早于 job 的 `if` 求值,若对全部事件为真,PR 上一条普通评论就会新建 run 并掐掉正在进行的评审,而该 run 自身随后又被跳过。
 
 ## 行为
 
