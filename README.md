@@ -8,11 +8,15 @@ Vanzo-Media 共用的 GitHub Actions 可复用工作流。
 
 ### 1. 添加 secret
 
-在目标仓库 `Settings → Secrets and variables → Actions` 添加:
+在目标仓库 `Settings → Secrets and variables → Actions` 添加**所用 provider 的**凭证。默认使用 DeepSeek,只需第一行:
 
-| Name | Value |
-| --- | --- |
-| `DEEPSEEK_KEY` | DeepSeek 开放平台的 API key |
+| Provider | Name | Value |
+| --- | --- | --- |
+| DeepSeek(默认) | `DEEPSEEK_KEY` | DeepSeek 开放平台的 API key |
+| AWS Bedrock | `AWS_ACCESS_KEY_ID` | 具备 `bedrock:InvokeModel` 权限的 IAM 凭证 |
+| AWS Bedrock | `AWS_SECRET_ACCESS_KEY` | 同上 |
+
+只需配置实际用到的那一套,其余留空即可——见 [切换模型 / 更换厂商](#切换模型--更换厂商)。区域不是敏感信息,通过 `aws_region` 参数传,不用建 secret。
 
 组织级 secret 在当前计划下对私有仓库无效,因此每个仓库都要各自添加一份。
 
@@ -62,7 +66,9 @@ jobs:
 
 ## 自定义
 
-### 调整模型
+### 切换模型 / 更换厂商
+
+模型名是 LiteLLM 标识,**必须带 provider 前缀**——切换厂商就是换这个前缀,工作流本身不用改:
 
 ```yaml
     with:
@@ -70,7 +76,27 @@ jobs:
       fallback_model: "deepseek/deepseek-v4-flash"
 ```
 
-换其他厂商时模型名需带 LiteLLM 的 provider 前缀,并相应替换 secret。
+换成 AWS Bedrock 上的 Claude,同时把凭证一并传进来:
+
+```yaml
+    with:
+      model: "bedrock/<inference-profile-id>"
+      fallback_model: "deepseek/deepseek-v4-pro"
+      aws_region: "us-east-1"
+    secrets:
+      DEEPSEEK_KEY: ${{ secrets.DEEPSEEK_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+```
+
+`<inference-profile-id>` 从 Bedrock 控制台 → Inference profiles 取,形如 `us.anthropic.claude-...`,随区域和已开通的模型而变。跨区域推理配置(inference profile)必须用带区域前缀的 ID,直接写基础模型 ID 会被 Bedrock 拒绝。
+
+几点须知:
+
+- **未使用的 provider 传空 secret 是安全的**,不必删掉 `secrets:` 中的条目。PR-Agent 的各 provider 分支都是真值判断,空字符串会被整段跳过,不会互相干扰。
+- **主模型与降级模型可以跨厂商**,上例即"Bedrock 限流或故障时落回 DeepSeek"。但这要求**两套凭证都在场**——工作流会对 `model` 和 `fallback_model` 分别校验,漏配直接快速失败,不会拖到降级那一刻才炸。
+- **Bedrock 的 AK 与 SK 必须成对配置。** 只配其中一个会被前置校验拦下;若绕过校验,PR-Agent 会抛 `AWS credentials are incomplete`。
+- **成本会变。** Bedrock 上的 Claude 单价高于 DeepSeek,而每次 push 都会跑一轮 `/review` + `/improve`。换厂商前先看 [关闭 push 触发](#关闭-push-触发)。
 
 ### 关闭 push 触发
 
