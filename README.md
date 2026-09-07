@@ -98,6 +98,32 @@ jobs:
 - **Bedrock 的 AK 与 SK 必须成对配置。** 只配其中一个会被前置校验拦下;若绕过校验,PR-Agent 会抛 `AWS credentials are incomplete`。
 - **成本会变。** Bedrock 上的 Claude 单价高于 DeepSeek,而每次 push 都会跑一轮 `/review` + `/improve`。换厂商前先看 [关闭 push 触发](#关闭-push-触发)。
 
+### 调整 token 预算
+
+单次评审能读进多少 diff,由 `max_model_tokens` 决定(默认 **200000**):
+
+```yaml
+    with:
+      max_model_tokens: "400000"
+```
+
+**这是硬上限,与模型能力无关。** PR-Agent 的 `get_max_tokens()` 最后一步是 `min(config.max_model_tokens, 模型自身上限)`,所以模型再大也会被这个值掐住。上游默认值是 `32000`,本工作流把它提到 200000。
+
+预算不够时不会报错,而是**静默降级成部分审查**:PR-Agent 按文件优先级排序,塞到装不下为止,剩下的写进「未纳入审查」清单,job 照样成功。判断依据是机器人评论里的 `"complete": false, "kind": "partial"`,以及 `because of the token budget` 字样。看到这个就该往上调,或按下面的办法省预算。
+
+几点须知:
+
+- **换更大的模型不解决这个问题。** 瓶颈在这个配置,不在模型。参考:`deepseek/deepseek-v4-flash` 和 `gpt-5.5` 在 PR-Agent 的 `MAX_TOKENS` 表里登记为 100 万,`gemini-2.5-pro` 约 105 万,而 **Claude 全系只有 20 万**——切到 Bedrock 上的 Claude 反而会缩小可用上下文。
+- **不建议直接拉到模型上限。** 上游注释指出输入过长会让模型表现下降;而且每次 push 跑 `/review` + `/improve` 两轮,输入 token 直接乘二,成本线性增长。
+- **先省预算,再加预算。** 排除生成物、锁文件、测试数据往往比调高上限更划算,既省钱又提高信噪比。在调用方仓库根目录的 `.pr_agent.toml` 里配:
+
+  ```toml
+  [ignore]
+  glob = ['**/_generated/**', 'pnpm-lock.yaml', 'eval/**']
+  ```
+
+  和 `extra_instructions` 一样,**该文件从默认分支读**,改完要先合进 `main` 才对后续 PR 生效。
+
 ### 关闭 push 触发
 
 每次 push 都会消耗一次模型调用。只想在 PR 打开时审一次:
@@ -127,5 +153,6 @@ extra_instructions = """
 
 - **来自 fork 的 PR 不会被审查。** GitHub 不向 fork PR 下发 secrets,这是安全设计。内部协作(同仓库分支)不受影响。
 - **审查结果不阻止合并。** job 成功与否与审查是否发现问题无关,它是建议性的。
+- **评审可能只覆盖部分文件。** 超出 token 预算的文件会被静默跳过,job 仍然成功。大 PR 收到评审后,先看评论里是不是 `"kind": "partial"`——是的话别把"只报了一条"当成"其余干净",没被读到的文件根本没审。见 [调整 token 预算](#调整-token-预算)。
 - **采纳 suggestion 前先看行范围。** GitHub 的 Commit suggestion 对锚定行范围做字面替换,若建议内容含省略号等占位符,一次点击就会删掉整段配置。已在审查规则中约束模型不得如此输出,但跨十几行的建议仍建议展开核对。
 - **第三方 action 锁定在 commit SHA。** 它在调用方仓库上下文中执行并持有 write token 与 API key,跟随 `@main` 或 tag 意味着上游任何提交都会未经审查直接运行,而 tag 可被 force-push 移动。升级由本仓库的 Dependabot 提 PR。

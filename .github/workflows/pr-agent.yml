@@ -30,6 +30,10 @@ on:
         description: "Bedrock 区域。仅当 model 或 fallback_model 为 bedrock/ 前缀时使用"
         type: string
         default: "us-east-1"
+      max_model_tokens:
+        description: "单次评审可用的 token 总预算上限。装不下的文件会被列入「未纳入审查」清单"
+        type: string
+        default: "200000"
     # 各 provider 的凭证一律可选:调用方只配 model 实际用到的那一套。
     # 未使用的 provider 传空字符串是安全的——PR-Agent 的 provider 分支全部是
     # 真值判断(litellm_ai_handler.py 中 `if get_settings().get("DEEPSEEK.KEY", None):`
@@ -134,6 +138,20 @@ jobs:
           # PR-Agent 从仓库默认分支读取该文件,PR 分支上的改动不生效。
           config.model: ${{ inputs.model }}
           config.fallback_models: '["${{ inputs.fallback_model }}"]'
+
+          # token 预算上限。必须显式设置:PR-Agent 的默认值是 32000,且它是
+          # 硬上限——get_max_tokens() 最后一步是 min(config.max_model_tokens,
+          # 模型自身上限),所以模型再大也会被掐到 32k。默认值下,一个 40 文件、
+          # 8000 行的 PR 只有十几个文件进得了 prompt,其余被列入「未纳入审查」
+          # 清单,而 job 仍然成功,评审只是静默降级成部分审查(评论里的
+          # "kind": "partial")。换更大的模型不解决这个问题,改这里才解决。
+          #
+          # 取 200000 而非模型上限(deepseek-v4-flash 在 PR-Agent 的 MAX_TOKENS
+          # 表里登记为 1M)有两个原因:一是上游注释指出输入过长会让模型表现下降;
+          # 二是每次 push 都跑 /review + /improve 两轮,输入 token 直接乘二。
+          # 200k 够覆盖本组织迄今最大的 PR 并留一倍余量,又不至于让某个失控的
+          # PR 一次烧掉百万级输入。确实需要更大时,由调用方传 max_model_tokens。
+          config.max_model_tokens: ${{ inputs.max_model_tokens }}
 
           # 以 GitHub 原生 suggestion 块发布建议,使评论上出现
           # 可直接提交的 Commit suggestion 按钮。
