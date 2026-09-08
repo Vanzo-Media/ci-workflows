@@ -148,7 +148,7 @@ jobs:
             # (表按完整模型串匹配,而网关模型串形如 openai/@slug/name),
             # get_max_tokens() 届时直接抛异常。这里提前拦下并说明原因。
             case "$CUSTOM_MODEL_MAX_TOKENS" in
-              ''|-*|0) fail "已设置 openai_api_base,必须同时传正数的 custom_model_max_tokens;网关模型不在 PR-Agent 的 MAX_TOKENS 表中,不设置会在评审时抛异常。" ;;
+              ''|*[!0-9]*|0*) fail "已设置 openai_api_base,必须同时传十进制正整数的 custom_model_max_tokens(当前值:${CUSTOM_MODEL_MAX_TOKENS:-空});网关模型不在 PR-Agent 的 MAX_TOKENS 表中,非法值会在评审时抛异常。" ;;
             esac
           fi
 
