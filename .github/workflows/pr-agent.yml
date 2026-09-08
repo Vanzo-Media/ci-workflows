@@ -139,6 +139,7 @@ jobs:
           # 例如 openai/@dashscope/... 降级到 openai/@deepseek/...。
           if [ -n "$OPENAI_API_BASE" ]; then
             for m in "$MODEL" "$FALLBACK_MODEL"; do
+              [ -z "$m" ] && continue
               case "$m" in
                 openai/*) ;;
                 *) fail "已设置 openai_api_base,但 $m 不是 openai/ 前缀。api_base 对所有 provider 全局生效,混用会让该模型的请求被打到网关地址上。" ;;
