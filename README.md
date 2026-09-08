@@ -15,6 +15,7 @@ Vanzo-Media 共用的 GitHub Actions 可复用工作流。
 | DeepSeek(默认) | `DEEPSEEK_KEY` | DeepSeek 开放平台的 API key |
 | AWS Bedrock | `AWS_ACCESS_KEY_ID` | 具备 `bedrock:InvokeModel` 权限的 IAM 凭证 |
 | AWS Bedrock | `AWS_SECRET_ACCESS_KEY` | 同上 |
+| OpenAI 兼容网关(Portkey) | `PORTKEY_API_KEY` | Portkey 的网关密钥。各厂商自己的 key 存在 Portkey 侧,不进本仓库 |
 
 只需配置实际用到的那一套,其余留空即可——见 [切换模型 / 更换厂商](#切换模型--更换厂商)。区域不是敏感信息,通过 `aws_region` 参数传,不用建 secret。
 
@@ -97,6 +98,32 @@ jobs:
 - **主模型与降级模型可以跨厂商**,上例即"Bedrock 限流或故障时落回 DeepSeek"。但这要求**两套凭证都在场**——工作流会对 `model` 和 `fallback_model` 分别校验,漏配直接快速失败,不会拖到降级那一刻才炸。
 - **Bedrock 的 AK 与 SK 必须成对配置。** 只配其中一个会被前置校验拦下;若绕过校验,PR-Agent 会抛 `AWS credentials are incomplete`。
 - **成本会变。** Bedrock 上的 Claude 单价高于 DeepSeek,而每次 push 都会跑一轮 `/review` + `/improve`。换厂商前先看 [关闭 push 触发](#关闭-push-触发)。
+
+### 走 OpenAI 兼容网关(Portkey)
+
+通过网关调用时,厂商自己的 key 存在网关侧,各仓库只需要一把网关密钥:
+
+```yaml
+    with:
+      model: "openai/@dashscope/qwen3.8-max"
+      fallback_model: "openai/@deepseek/deepseek-chat"
+      openai_api_base: "https://api.portkey.ai/v1"
+      custom_model_max_tokens: "200000"
+    secrets:
+      PORTKEY_API_KEY: ${{ secrets.PORTKEY_API_KEY }}
+```
+
+模型串是 `openai/` 前缀 + 网关自己的模型 ID。Portkey 的格式是 `@<provider-slug>/<model>`,slug 在 Portkey 的 Model Catalog 里定义。LiteLLM 只按第一个 `/` 剥前缀,后面的 `@slug/model` 原样透传给网关。
+
+**三条硬性要求,漏了会被前置校验直接拦下:**
+
+- **`custom_model_max_tokens` 必填,且为正数。** PR-Agent 的 `MAX_TOKENS` 表按完整模型串匹配,而网关模型串(`openai/@slug/name`)必然不在表里,`get_max_tokens()` 届时直接抛异常。这个值纯手工维护,**写错不会报错,只会让评审静默按错的预算跑**。最终预算是 `min(max_model_tokens, 本值)`,所以填到不小于 `max_model_tokens` 即可,不必精确等于模型真实窗口。
+- **`openai_api_base` 与 `PORTKEY_API_KEY` 必须成对。** 只给 key 会打到 `api.openai.com`;只给 base URL 则没有凭证。
+- **`model` 与 `fallback_model` 必须都是 `openai/` 前缀。** `api_base` 一旦设置就对所有 provider 全局生效(PR-Agent 把它塞进每一次 completion 的 kwargs),主模型走网关、降级留直连的组合会让降级请求带着厂商 key 打到网关地址上,且只在降级那一刻才炸。
+
+跨厂商降级在网关下仍然可行,写成同一网关的不同 slug 即可,上例就是 Qwen 降级到 DeepSeek。
+
+**与直连的取舍:** 走网关会失去 `MAX_TOKENS` 自动识别。若某模型已在 PR-Agent 表中(例如 `dashscope/qwen3.8-max` 登记为 1M),直连只需一行 `model:` 加一个厂商 secret,不必维护 `custom_model_max_tokens`。网关的价值在于凭证集中管理与统一的调用看板,不在于换模型本身。
 
 ### 调整 token 预算
 

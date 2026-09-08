@@ -34,6 +34,14 @@ on:
         description: "单次评审可用的 token 总预算上限。装不下的文件会被列入「未纳入审查」清单"
         type: string
         default: "200000"
+      openai_api_base:
+        description: "OpenAI 兼容网关的 base URL(如 Portkey: https://api.portkey.ai/v1)。留空则直连各厂商"
+        type: string
+        default: ""
+      custom_model_max_tokens:
+        description: "模型的上下文上限。仅当 model 不在 PR-Agent 的 MAX_TOKENS 表中时必填(走网关时必然如此)"
+        type: string
+        default: "-1"
     # 各 provider 的凭证一律可选:调用方只配 model 实际用到的那一套。
     # 未使用的 provider 传空字符串是安全的——PR-Agent 的 provider 分支全部是
     # 真值判断(litellm_ai_handler.py 中 `if get_settings().get("DEEPSEEK.KEY", None):`
@@ -49,6 +57,10 @@ on:
       AWS_ACCESS_KEY_ID:
         required: false
       AWS_SECRET_ACCESS_KEY:
+        required: false
+      # OpenAI 兼容网关(Portkey)的密钥。经 openai.key 下发,与 openai_api_base
+      # 配对使用。厂商自己的 key 存在网关侧,不再进入各仓库的 Secrets。
+      PORTKEY_API_KEY:
         required: false
 
 jobs:
@@ -76,6 +88,9 @@ jobs:
         env:
           MODEL: ${{ inputs.model }}
           FALLBACK_MODEL: ${{ inputs.fallback_model }}
+          OPENAI_API_BASE: ${{ inputs.openai_api_base }}
+          CUSTOM_MODEL_MAX_TOKENS: ${{ inputs.custom_model_max_tokens }}
+          PORTKEY_API_KEY: ${{ secrets.PORTKEY_API_KEY }}
           DEEPSEEK_KEY: ${{ secrets.DEEPSEEK_KEY }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -96,6 +111,15 @@ jobs:
                 [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ] \
                   || fail "模型 $1 需要 AWS_ACCESS_KEY_ID 与 AWS_SECRET_ACCESS_KEY 两者,但本仓库缺少其中至少一个。"
                 ;;
+              openai/*)
+                # OpenAI 兼容网关(Portkey 等)。key 与 base URL 必须成对:
+                # 只给 key 会打到 api.openai.com 上,拿着网关的 key 认证失败;
+                # 只给 base URL 则完全没有凭证。
+                [ -n "$PORTKEY_API_KEY" ] \
+                  || fail "模型 $1 需要 PORTKEY_API_KEY,但本仓库未配置。"
+                [ -n "$OPENAI_API_BASE" ] \
+                  || fail "模型 $1 是 openai/ 前缀,必须同时传 openai_api_base(如 https://api.portkey.ai/v1)。"
+                ;;
               *)
                 echo "::warning::模型 $1 的 provider 前缀未被本校验覆盖,跳过凭证检查。若认证失败,请查看 PR Agent 步骤的日志。"
                 ;;
@@ -103,6 +127,30 @@ jobs:
           }
           check_provider "$MODEL"
           check_provider "$FALLBACK_MODEL"
+
+          # openai.api_base 一旦设置就是全局的:PR-Agent 把它塞进每一次
+          # completion 调用的 kwargs(litellm_ai_handler.py 中
+          # `kwargs = {..., "api_base": api_base}`),不按 provider 区分。
+          # 因此主模型走网关、降级模型留直连的组合必然失败——降级请求会带着
+          # 厂商的 key 打到网关地址上。这种配置只在降级那一刻才炸,极难排查,
+          # 在这里直接拦下。
+          #
+          # 走网关时跨厂商降级仍然可行,只是要写成同一个网关下的不同 slug,
+          # 例如 openai/@dashscope/... 降级到 openai/@deepseek/...。
+          if [ -n "$OPENAI_API_BASE" ]; then
+            for m in "$MODEL" "$FALLBACK_MODEL"; do
+              case "$m" in
+                openai/*) ;;
+                *) fail "已设置 openai_api_base,但 $m 不是 openai/ 前缀。api_base 对所有 provider 全局生效,混用会让该模型的请求被打到网关地址上。" ;;
+              esac
+            done
+            # 走网关时 model 必然不在 PR-Agent 的 MAX_TOKENS 表里
+            # (表按完整模型串匹配,而网关模型串形如 openai/@slug/name),
+            # get_max_tokens() 届时直接抛异常。这里提前拦下并说明原因。
+            case "$CUSTOM_MODEL_MAX_TOKENS" in
+              ''|-*|0) fail "已设置 openai_api_base,必须同时传正数的 custom_model_max_tokens;网关模型不在 PR-Agent 的 MAX_TOKENS 表中,不设置会在评审时抛异常。" ;;
+            esac
+          fi
 
       - name: PR Agent action step
         id: pragent
@@ -152,6 +200,28 @@ jobs:
           # 200k 够覆盖本组织迄今最大的 PR 并留一倍余量,又不至于让某个失控的
           # PR 一次烧掉百万级输入。确实需要更大时,由调用方传 max_model_tokens。
           config.max_model_tokens: ${{ inputs.max_model_tokens }}
+
+          # OpenAI 兼容网关(Portkey 等)。与直连各厂商互斥,由上面的校验步骤保证。
+          #
+          # 只写 openai.key 而不写 OPENAI_API_KEY,与本文件里 deepseek/bedrock
+          # 的双写做法不同:PR-Agent 读到 OPENAI.KEY 后会自己赋给 litellm.openai_key
+          # (litellm_ai_handler.py 的 `litellm.openai_key = get_settings().openai.key`),
+          # LiteLLM 不需要再从环境变量取一遍。多写一个空的 OPENAI_API_KEY 反而可能
+          # 让不走网关的调用方被误判成"配了 OpenAI 凭证"。
+          #
+          # 两者留空时整段跳过(PR-Agent 对 OPENAI.KEY 与 OPENAI.API_BASE 都是
+          # 真值判断),对直连 deepseek/bedrock 的调用方无影响。
+          openai.key: ${{ secrets.PORTKEY_API_KEY }}
+          openai.api_base: ${{ inputs.openai_api_base }}
+
+          # 模型的上下文上限,仅在 model 不在 PR-Agent 的 MAX_TOKENS 表里时生效。
+          # 默认 -1 表示"未设置",对直连调用方是 no-op(get_max_tokens 只在
+          # `elif custom_max_tokens > 0` 分支用它)。走网关时必填,理由见校验步骤。
+          #
+          # 注意这是纯手工维护的数字:写错不会报错,只会让评审静默按错的预算跑。
+          # 最终预算是 min(max_model_tokens, 本值),所以填到不小于
+          # max_model_tokens 即可,不必精确等于模型的真实窗口。
+          config.custom_model_max_tokens: ${{ inputs.custom_model_max_tokens }}
 
           # 以 GitHub 原生 suggestion 块发布建议,使评论上出现
           # 可直接提交的 Commit suggestion 按钮。
