@@ -26,5 +26,17 @@ jobs:
       issues: write
       pull-requests: write
       checks: write
+    # 与其余 7 个调用方保持一致:经 Portkey 网关调用 Qwen。本仓库自己的
+    # DEEPSEEK_KEY 已被移除,故不再透传——那会是一条并不存在的退路。需要
+    # 切回直连时,补上该 secret 并把这里改成 deepseek/ 前缀即可。
+    #
+    # 各参数的含义与注意事项(降级模型必须同走网关、custom_model_max_tokens
+    # 必填)见 pr-agent.yml 中对应位置的注释,以及 README 的「走 OpenAI
+    # 兼容网关(Portkey)」一节。
+    with:
+      model: "openai/@dashscope/qwen3.8-max"
+      fallback_model: "openai/@deepseek/deepseek-chat"
+      openai_api_base: "https://api.portkey.ai/v1"
+      custom_model_max_tokens: "200000"
     secrets:
-      DEEPSEEK_KEY: ${{ secrets.DEEPSEEK_KEY }}
+      PORTKEY_API_KEY: ${{ secrets.PORTKEY_API_KEY }}

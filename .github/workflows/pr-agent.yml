@@ -42,6 +42,14 @@ on:
         description: "模型的上下文上限。仅当 model 不在 PR-Agent 的 MAX_TOKENS 表中时必填(走网关时必然如此)"
         type: string
         default: "-1"
+      ai_timeout:
+        description: "单次模型请求的超时(秒)。超时后 LiteLLM 会内部重试约 3 次,故实际耗时约为本值的 3 倍"
+        type: string
+        default: "300"
+      job_timeout_minutes:
+        description: "整个评审 job 的超时(分钟)。超时表现为 job 被 cancel,已发出的评论保留、未跑完的命令丢失"
+        type: number
+        default: 30
     # 各 provider 的凭证一律可选:调用方只配 model 实际用到的那一套。
     # 未使用的 provider 传空字符串是安全的——PR-Agent 的 provider 分支全部是
     # 真值判断(litellm_ai_handler.py 中 `if get_settings().get("DEEPSEEK.KEY", None):`
@@ -74,7 +82,12 @@ jobs:
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     name: AI Code Review
-    timeout-minutes: 15
+    # PR-Agent 的两个命令(/review 与 /improve)串行执行,每个都要跑完整的
+    # 模型调用。这个值必须容得下最坏情况:大 PR + 慢模型 + 一次重试。
+    # 超时不是失败而是 cancel——已发出的评论留在 PR 上,没跑完的命令直接
+    # 消失,表现为「只有 Reviewer Guide、没有 Code Suggestions」,不看
+    # job 状态很容易误判成"模型没给建议"。
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
     steps:
       # 前置校验。workflow_call 的 secrets.required 只要求调用方"传了这个参数",
       # 传空字符串同样满足,因此新仓库接入时忘配 secret 不会被拦住,而是跑满
@@ -223,6 +236,16 @@ jobs:
           # 最终预算是 min(max_model_tokens, 本值),所以填到不小于
           # max_model_tokens 即可,不必精确等于模型的真实窗口。
           config.custom_model_max_tokens: ${{ inputs.custom_model_max_tokens }}
+
+          # 单次模型请求的超时。PR-Agent 的默认值是 120 秒,对经网关调用的
+          # 大模型偏短:实测 Qwen 经 Portkey 的单次调用常超过 120 秒,而超时
+          # 后 LiteLLM 内部还会重试约 3 次(日志里表现为 `timeout value=120.0,
+          # time taken=361 seconds`),再叠加 config.retry_same_model_on_timeout
+          # 的整体重试,十几分钟就烧在反复撞墙上,评审只跑完一半。
+          #
+          # 这个值要按"最慢的一次正常返回"来设,而不是按平均值——设小了不会
+          # 报错,只会让评审静默地少跑几个命令。
+          config.ai_timeout: ${{ inputs.ai_timeout }}
 
           # 以 GitHub 原生 suggestion 块发布建议,使评论上出现
           # 可直接提交的 Commit suggestion 按钮。

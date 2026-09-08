@@ -151,6 +151,29 @@ jobs:
 
   和 `extra_instructions` 一样,**该文件从默认分支读**,改完要先合进 `main` 才对后续 PR 生效。
 
+### 调整超时
+
+两个超时,层级不同,通常要一起调:
+
+```yaml
+    with:
+      ai_timeout: "300"          # 单次模型请求,秒
+      job_timeout_minutes: 45    # 整个 job,分钟
+```
+
+**`ai_timeout`(默认 300)** 是单次模型请求的上限。PR-Agent 上游默认 120 秒,对经网关调用的大模型偏短。超时不会立刻放弃:LiteLLM 内部还会重试约 3 次,所以日志里看到的是 `timeout value=120.0, time taken=361 seconds`——一次"超时"实际烧掉 6 分钟。再叠加 `retry_same_model_on_timeout` 的整体重试,十几分钟就耗光了。
+
+**`job_timeout_minutes`(默认 30)** 是整个 job 的上限。`/review` 与 `/improve` 串行执行,每个都要跑完整的模型调用,所以要按"大 PR + 慢模型 + 一次重试"的最坏情况来留。
+
+**两者都是设小了不报错、只会静默少跑命令的参数。** job 超时的表现是 `cancelled` 而不是 `failure`:已发出的评论留在 PR 上,没跑完的命令直接消失。典型症状是**只有 `PR Reviewer Guide`、没有 `PR Code Suggestions`**——不看 job 状态很容易误判成"模型没给出建议"。
+
+排查时先看日志里有没有 `litellm.Timeout`:
+
+- **有** → 调大 `ai_timeout`
+- **没有,但 job 是 `cancelled`** → 调大 `job_timeout_minutes`
+
+如果 `ai_timeout` 调大后仍然超时,考虑是网关在非流式模式下缓冲整个响应所致,可查 PR-Agent 的 `litellm.force_streaming_api_base_substrings`。
+
 ### 关闭 push 触发
 
 每次 push 都会消耗一次模型调用。只想在 PR 打开时审一次:
@@ -180,6 +203,7 @@ extra_instructions = """
 
 - **来自 fork 的 PR 不会被审查。** GitHub 不向 fork PR 下发 secrets,这是安全设计。内部协作(同仓库分支)不受影响。
 - **审查结果不阻止合并。** job 成功与否与审查是否发现问题无关,它是建议性的。
+- **评审可能只跑完一半。** job 超时表现为 `cancelled` 而非 `failure`,已发出的评论会留在 PR 上。只看到 `PR Reviewer Guide` 而没有 `PR Code Suggestions` 时,先看 job 状态,别急着当成"模型没建议"。见 [调整超时](#调整超时)。
 - **评审可能只覆盖部分文件。** 超出 token 预算的文件会被静默跳过,job 仍然成功。大 PR 收到评审后,先看评论里是不是 `"kind": "partial"`——是的话别把"只报了一条"当成"其余干净",没被读到的文件根本没审。见 [调整 token 预算](#调整-token-预算)。
 - **采纳 suggestion 前先看行范围。** GitHub 的 Commit suggestion 对锚定行范围做字面替换,若建议内容含省略号等占位符,一次点击就会删掉整段配置。已在审查规则中约束模型不得如此输出,但跨十几行的建议仍建议展开核对。
 - **第三方 action 锁定在 commit SHA。** 它在调用方仓库上下文中执行并持有 write token 与 API key,跟随 `@main` 或 tag 意味着上游任何提交都会未经审查直接运行,而 tag 可被 force-push 移动。升级由本仓库的 Dependabot 提 PR。
