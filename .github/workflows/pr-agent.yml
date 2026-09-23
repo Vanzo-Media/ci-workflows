@@ -46,6 +46,10 @@ on:
         description: "单次模型请求的超时(秒)。超时后 LiteLLM 会内部重试约 3 次,故实际耗时约为本值的 3 倍"
         type: string
         default: "300"
+      retry_same_model_on_timeout:
+        description: "主模型失败后是否用同一个模型再试一轮。默认 false:直接降级,把时间留给后面的命令"
+        type: string
+        default: "false"
       job_timeout_minutes:
         description: "整个评审 job 的超时(分钟)。超时表现为 job 被 cancel,已发出的评论保留、未跑完的命令丢失"
         type: number
@@ -246,6 +250,21 @@ jobs:
           # 这个值要按"最慢的一次正常返回"来设,而不是按平均值——设小了不会
           # 报错,只会让评审静默地少跑几个命令。
           config.ai_timeout: ${{ inputs.ai_timeout }}
+
+          # 主模型失败后是否再试同一个模型。PR-Agent 的默认是 true,对配了
+          # fallback_model 的场景是亏的:模型返回 500 或超时,通常是那条路本身
+          # 坏了,再试一轮只会再烧一个 ai_timeout × 3。
+          #
+          # 时间预算是乘出来的,三个值必须一起看:
+          #   单个模型一轮 ≈ ai_timeout × 3(LiteLLM 内部重试)
+          #   /review 最坏情况 = 上面 × (主模型轮数 + 降级模型 1 轮)
+          #   /review 与 /improve 各算一次,两者共用 job_timeout_minutes
+          # 按当前默认值(ai_timeout=300、job=30 分钟)算:retry 为 true 时,
+          # 光是主模型两轮就是 300 × 3 × 2 = 30 分钟,正好吃满上限,降级模型
+          # 即使秒回也来不及,/improve 一次都跑不到。这不是假设——2026-09-18
+          # 至 09-21 间 vanzo-space 的 PR #11 连续三次撞上,三次都停在同一处。
+          # 改为 false 后同样的故障只花一轮,降级模型 5 秒返回,评审照常发出。
+          config.retry_same_model_on_timeout: ${{ inputs.retry_same_model_on_timeout }}
 
           # 以 GitHub 原生 suggestion 块发布建议,使评论上出现
           # 可直接提交的 Commit suggestion 按钮。
